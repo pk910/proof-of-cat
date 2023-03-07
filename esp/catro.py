@@ -119,7 +119,7 @@ def await_movement():
             sleep_ms(500)
     
     led.show_led((0,LED_INTENSITY,0))
-    idle_count = 0
+    idle_time = 0
     return data
 
 def rng():

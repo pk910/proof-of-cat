@@ -48,29 +48,50 @@ def do_deepsleep(time):
 def save_rtc_state(state):
     # persist state
     if state > 0:
-        rtc.memory(f"{entropy_str}\n{last_gyro_data[0]}|{last_gyro_data[1]}|{last_gyro_data[2]}\n{idle_time}\n{state}")
+        entropy_len = len(entropy_str)
+        if entropy_len % 2 == 1:
+            entropy_len = entropy_len - 1
+        entropy_data = ubinascii.unhexlify(entropy_str[:entropy_len])
+        
+        rtc_state = f"{last_gyro_data[0]}|{last_gyro_data[1]}|{last_gyro_data[2]}/{idle_time}/{state}";
+        rtc_state_len = len(rtc_state);
+        
+        rtc_data = rtc_state_len.to_bytes(2, 'big') + rtc_state.encode('ascii') + entropy_data
+        rtc.memory(rtc_data)
+        
+        
+        print (f"persisted state:")
+        print (f"  state: {state}")
+        print (f"  entropy length: {entropy_len}")
+        print (f"  gyro data: {last_gyro_data[0]}, {last_gyro_data[1]}, {last_gyro_data[2]}")
+        print (f"  idle time: {idle_time} ms")
+        print (f"  total length: {len(rtc_data)}")
     else:
         rtc.memory("")
     
 def load_rtc_state():
     global entropy_str, last_gyro_data, idle_time
-    rtc_data = rtc.memory().decode("utf-8").split("\n")
-    if len(rtc_data) != 4:
-        return 0
-    entropy_str = rtc_data[0]
+    rtc_data = rtc.memory();
+    rtc_state_len = int.from_bytes(rtc_data[:2], 'big')
     
-    gyro_data = rtc_data[1].split("|")
+    entropy_data = rtc_data[(rtc_state_len+2):]
+    entropy_str = ubinascii.hexlify(entropy_data).decode("ascii")
+    rtc_data = rtc_data[2:(rtc_state_len+2)].decode("ascii").split("/")
+    if len(rtc_data) != 3:
+        return 0
+    
+    gyro_data = rtc_data[0].split("|")
     last_gyro_data = (float(gyro_data[0]), float(gyro_data[1]), float(gyro_data[2]))
     
-    idle_time = int(rtc_data[2])
+    idle_time = int(rtc_data[1])
     
     print (f"restored state:")
-    print (f"  state: {rtc_data[3]}")
+    print (f"  state: {rtc_data[2]}")
     print (f"  entropy length: {len(entropy_str)}")
     print (f"  gyro data: {last_gyro_data[0]}, {last_gyro_data[1]}, {last_gyro_data[2]}")
     print (f"  idle time: {idle_time} ms")
     
-    return int(rtc_data[3])
+    return int(rtc_data[2])
 
 def get_uptime():
     uptime_s = int(time.ticks_ms() / 1000)
@@ -198,7 +219,7 @@ def connect_wifi():
 
 # init code
 wake_reason = wake_reason()
-wake_state = load_rtc_state()
+wake_state = load_rtc_state();
 
 if wake_reason == DEEPSLEEP and wake_state == 1:
     print ("Resume Catropy")
@@ -240,7 +261,7 @@ if wake_state != 2:
 print("Initial entropy gathered, starting API")
 
 # enabling wifi quite often kills the board, so save the state to RTC here
-save_rtc_state(2)
+save_rtc_state(2);
 
 led.show_led((0,0,LED_LOW_INTENSITY))
 wlan.active(True)
@@ -256,8 +277,6 @@ while True:
     sleep_ms(100)
     print("Retry WiFi connect")
 
-# flush RTC again as wifi is running now
-save_rtc_state(0)
 
 print("Start webserver")
 led.show_led((0,0,LED_INTENSITY))
@@ -286,6 +305,8 @@ def entropy(request):
 def entropy(request):
     await request.write("HTTP/1.1 200 OK\r\n\r\n")
     await request.write("reboot")
+    
+    save_rtc_state(0)
     sleep_ms(1000)
     reset()
     

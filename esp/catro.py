@@ -38,18 +38,25 @@ idle_time = 0
 
 def do_deepsleep(time):
     # persist state
-    rtc.memory(f"{entropy_str}\n{last_gyro_data[0]}|{last_gyro_data[1]}|{last_gyro_data[2]}\n{idle_time}")
+    save_rtc_state(1)
     
     led.show_led((0,0,0))
     sleep_ms(50)
     
     deepsleep(time)
     
-def awake_deepsleep():
+def save_rtc_state(state):
+    # persist state
+    if state > 0:
+        rtc.memory(f"{entropy_str}\n{last_gyro_data[0]}|{last_gyro_data[1]}|{last_gyro_data[2]}\n{idle_time}\n{state}")
+    else:
+        rtc.memory("")
+    
+def load_rtc_state():
     global entropy_str, last_gyro_data, idle_time
     rtc_data = rtc.memory().decode("utf-8").split("\n")
-    if len(rtc_data) != 3:
-        return
+    if len(rtc_data) != 4:
+        return 0
     entropy_str = rtc_data[0]
     
     gyro_data = rtc_data[1].split("|")
@@ -58,9 +65,12 @@ def awake_deepsleep():
     idle_time = int(rtc_data[2])
     
     print (f"restored state:")
+    print (f"  state: {rtc_data[3]}")
     print (f"  entropy length: {len(entropy_str)}")
     print (f"  gyro data: {last_gyro_data[0]}, {last_gyro_data[1]}, {last_gyro_data[2]}")
     print (f"  idle time: {idle_time} ms")
+    
+    return int(rtc_data[3])
 
 def get_uptime():
     uptime_s = int(time.ticks_ms() / 1000)
@@ -188,17 +198,25 @@ def connect_wifi():
 
 # init code
 wake_reason = wake_reason()
-if wake_reason == DEEPSLEEP:
+wake_state = load_rtc_state()
+
+if wake_reason == DEEPSLEEP and wake_state == 1:
     print ("Resume Catropy")
     led.show_led((LED_LOW_INTENSITY,LED_LOW_INTENSITY,0))
     sleep_ms(50)
     led.show_led((LED_LOW_INTENSITY,0,0))
     
-    # restore persisted state
-    awake_deepsleep()
-    
     # check movement or go back to deepsleep
     await_movement()
+elif wake_state == 2:
+    print("Recovered Catropy after crash")
+    # blink to indicate crash recovery :)
+    for i in range(5):
+        led.show_led((LED_INTENSITY,0,0))
+        sleep_ms(100)
+        led.show_led((0,0,LED_INTENSITY))
+        sleep_ms(100)
+    
 else:
     print("Starting Catropy")
     
@@ -209,12 +227,41 @@ else:
         led.show_led((0,LED_INTENSITY,0))
         sleep_ms(100)
     
+    entropy_str = ""
+    
     led.show_led((LED_LOW_INTENSITY,0,0))
+    
 
 #print(f"Battery Status: VCELL: {battery.vcell}, SOC: {battery.soc}, CRATE: {battery.crate}")
-print("Starting randomness generation")
-rng()
+if wake_state != 2:
+    print("Starting randomness generation")
+    rng()
+
 print("Initial entropy gathered, starting API")
+
+# enabling wifi quite often kills the board, so save the state to RTC here
+save_rtc_state(2)
+
+led.show_led((0,0,LED_LOW_INTENSITY))
+wlan.active(True)
+while True:
+    
+    if connect_wifi():
+        break
+    elif wlan.isconnected():
+        wlan.disconnect()
+    
+    sleep(2)
+    led.show_led((LED_INTENSITY,0,LED_INTENSITY))
+    sleep_ms(100)
+    print("Retry WiFi connect")
+
+# flush RTC again as wifi is running now
+save_rtc_state(0)
+
+print("Start webserver")
+led.show_led((0,0,LED_INTENSITY))
+
 
 @naw.route("/status")
 async def status(request):
@@ -253,24 +300,6 @@ async def status(request):
         "soc": battery.soc}))
 
 loop = uasyncio.get_event_loop()
-if DEBUG:
-    print("Starting webserver")
-
-led.show_led((0,0,LED_LOW_INTENSITY))
-wlan.active(True)
-while True:
-    
-    if connect_wifi():
-        break
-    elif wlan.isconnected():
-        wlan.disconnect()
-    
-    sleep(2)
-    led.show_led((LED_INTENSITY,0,LED_INTENSITY))
-    sleep_ms(100)
-    print("Retry WiFi connect")
-
-print("Start webserver")
-led.show_led((0,0,LED_INTENSITY))
 loop.create_task(naw.run())
 loop.run_forever()
+
